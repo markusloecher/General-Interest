@@ -1,0 +1,89 @@
+---
+title: "Financial Timeseries"
+author: "M Loecher"
+date: "31 5 2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tseries)
+library(xts)
+library(quantmod)
+library(dygraphs)
+newQuery=FALSE
+```
+
+## Fetching and plotting data for S&P500
+
+https://finance.yahoo.com/quote/%5EGSPC/
+
+```{r}
+if (newQuery){
+  x <- get.hist.quote(instrument = "^gspc", start = "1998-01-01")
+  save(x,file="sp500.rda")
+} else {
+  load("sp500.rda")
+}
+
+```
+
+
+```{r}
+dygraph(x) %>%  dyRangeSelector() 
+```
+
+## Autocorrelation in returns
+
+```{r}
+ShiftByK = function(x,k=1){#positive k shifts into "the future"
+  if (k==0) return(x)
+  N=length(x)
+  xShifted = x
+  #browser()
+  if (k>0) {
+    xShifted[1:k] = NA
+    xShifted[(k+1):(N)] = x[1:(N-k)]
+  }
+  if (k<0) {
+    k=abs(k)
+    xShifted[1:(N-k)] = x[(k+1):(N)]
+    xShifted[(N-k+1):(N)] = NA
+  }
+  
+  return(xShifted)
+  
+  
+  if (k>0) return(c(rep(NA,k), x[1:(N-k)]))
+  if (k<0) return(c(x[(k+1):(N)],rep(NA,k)))
+}
+head(cbind(x$Open,ShiftByK(x$Open,1),ShiftByK(x$Open,-1)))
+#head(x$Open -lag(x$Close))
+#head(x$Open[2:10] -x$Close[1:9])
+```
+
+```{r,fig.width=10}
+par(mfrow=c(1,2))
+#gain
+g=x$Close-x$Open
+acf(na.omit(g), na.action=na.pass,main="S&P 500, autocorrelation")
+
+plot(g,ShiftByK(g,1),pch=20,col=rgb(0,0,1,0.5),xlab="Today", ylab = "Tomorrow",main="S&P 500 returns",cex=0.4);grid()
+fit = lm(g ~ ShiftByK(g,1))
+abline(fit,col=2)
+print(coefficients(fit))
+```
+
+
+## only data since March
+
+```{r,fig.width=10}
+par(mfrow=c(1,2))
+gShort=g[index(g) > as.Date("2020-03-01")]
+acf(na.omit(gShort), na.action=na.pass,main="S&P 500, autocorr after March 1st")
+plot(gShort,ShiftByK(gShort,1),pch=20,col=rgb(0,0,1,0.5),xlab="Today", ylab = "Tomorrow",main="S&P 500 returns, after March 1st");grid()
+fit = lm(gShort ~ ShiftByK(gShort,1))
+abline(fit,col=2)
+print(coefficients(fit))
+```
+
