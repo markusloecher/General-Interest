@@ -1,0 +1,240 @@
+---
+title: "Accuracy of Empirical Assessment of partial $R^2$"
+author: "ML"
+date: "2025-06-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = F, warning = F)
+library(MASS)
+library(tibble)
+library(dplyr)
+library(ggplot2)
+```
+
+We know:
+In a multiple linear regression, the difference in $R^2$ between the full model and a reduced model (excluding one predictor) equals the *partial $R^2$* for that predictor.
+
+That’s because **partial $R^2$** is defined as:
+
+$$
+\text{Partial } R^2 = \frac{SSR_{\text{extra}}}{SSR_{\text{extra}} + SSE_{\text{full}}}
+= \frac{R^2_{\text{full}} - R^2_{\text{reduced}}}{1 - R^2_{\text{reduced}}}
+$$
+
+This simplifies to:
+
+$$
+\text{Partial } R^2 = R^2_{\text{full}} - R^2_{\text{reduced}}
+$$
+
+The following uses this logic to compare the empirically obtained partial $R^2$ with the expected (theoretical) value. 
+
+
+To my great surprise:
+
+1. The discrepancy is large, often of the order of $100 \%$.
+2. The estimates do not seem to improve at all with increasing sample size!
+
+
+
+
+```{r}
+set.seed(42)
+
+# Generate Toeplitz covariance matrix
+toeplitz_cov <- function(p, rho) {
+  matrix(rho ^ abs(row(matrix(1, p, p)) - col(matrix(1, p, p))), nrow = p)
+}
+
+# Generate data from multivariate normal with Toeplitz covariance
+generate_data <- function(n, p, rho = 0.5, beta_scale = 1.0, sigma = 1.0) {
+  Sigma <- toeplitz_cov(p, rho)
+  X <- MASS::mvrnorm(n = n, mu = rep(0, p), Sigma = Sigma)
+  if (beta_scale < 0) {#all coeffs equal
+    beta <- rep(abs(beta_scale), p)
+    #print(beta)
+  } else {
+    beta <- runif(p, -beta_scale, beta_scale)
+  }
+  
+  noise <- rnorm(n, mean = 0, sd = sigma)
+  Y <- X %*% beta + noise
+  list(X = X, Y = Y, beta = beta, Sigma = Sigma, sigma = sigma)
+}
+
+
+# Full experiment
+run_experiment <- function(sample_sizes, p = 5, rho = 0.0, beta_scale = 1.0, sigma = 0.5, fullTheory = TRUE) {
+  results <- list()
+
+  for (n in sample_sizes) {
+    dat <- generate_data(n, p, rho, beta_scale, sigma)
+    X <- dat$X; Y <- dat$Y; beta <- dat$beta;Xcov = dat$Sigma
+    X_red <- X[, -1, drop = FALSE]
+    
+    #theoretical/expected R2:##########
+    #1. full R2
+    
+    if (fullTheory){
+      var_signal <- beta %*% Xcov %*% beta
+      R2_full_th <- var_signal / (var_signal + sigma^2)# not a random variable !
+      var_signal <- beta[-1] %*% Xcov[-1,-1] %*% beta[-1]
+      R2_red_th <- var_signal / (var_signal + sigma^2)# not a random variable !
+      partial_r2_th <- R2_full_th - R2_red_th #not a random variable !
+    } else {
+      signal <- X %*% beta
+      var_signal <- var(signal)
+      R2_full_th <- var_signal / var(Y) #still a random variable !
+      
+      signal_red <- X_red %*% beta[-1]
+      R2_red_th <- var(signal_red) / var(Y) #still a random variable !
+      partial_r2_th <- R2_full_th - R2_red_th #still a random variable !
+    }
+    
+    #empirical R2:##########
+    #1. full R2
+    model_full <- lm(Y ~ X)
+    R2_full_emp <- summary(model_full)$r.squared
+    #2. partial R2
+    model_red <- lm(Y ~ X_red)
+    R2_red_emp <- summary(model_red)$r.squared
+    partial_r2_emp <- R2_full_emp - R2_red_emp
+
+    err_R2 <- 100 * abs(R2_full_emp - R2_full_th) / abs(R2_full_th)
+    
+    err_partial <- 100 * abs(partial_r2_emp - partial_r2_th) / abs(partial_r2_th)
+
+    results[[length(results) + 1]] <- tibble(
+      n = n,
+      partial_R2_theoretical = round(partial_r2_th, 3),
+      partial_R2_empirical = round(partial_r2_emp, 3),
+      error_partial_percent = round(err_partial, 2),
+      R2_full_theoretical = round(R2_full_th, 2),
+      R2_full_empirical = round(R2_full_emp, 2),
+      error_R2_percent = round(err_R2, 2)
+    )
+  }
+  bind_rows(results)
+}
+
+
+```
+
+
+```{r}
+R2 = list()
+```
+
+#### Case I: Orthogonal predictors, low dimensionality p=5
+
+```{r}
+# Run experiment
+sample_sizes <- c(500, 1000, 2000, 10000)
+p = 5; rho = 0.0
+results <- run_experiment(sample_sizes, p = p, rho = rho, beta_scale = 1.0, sigma = 0.5)
+R2[[paste0("p",p,"rho",rho)]] = results
+knitr::kable(results)
+```
+
+#### Case II: Toeplitz corelation of 0.1, medium dimensionality p=10
+
+```{r}
+# Run experiment
+sample_sizes <- c(200, 500, 1000, 2000, 10000)
+p = 10; rho = 0.1
+results <- run_experiment(sample_sizes, p = p, rho = rho, beta_scale = 1.0, sigma = 0.5)
+R2[[paste0("p",p,"rho",rho)]] = results
+knitr::kable(results)
+```
+
+So far, this looks good, and the agreement between theory and empirical values is good, BUT:
+
+#### Case III: Orthogonal predictors, p=10, but constant coefficients 
+
+Since all beta coefficients are equal, I would expect the partial $R^2$ to be around $0.1$.
+
+```{r}
+# Run experiment
+sample_sizes <- c(200, 500, 1000, 2000, 10000)
+p = 10; rho = 0.;beta_scale = -1.0
+results <- run_experiment(sample_sizes, p = p, rho = rho, beta_scale = beta_scale, sigma = 0.5)
+#print(results)
+R2[[paste0("p",p,"rho",rho, "beta",beta_scale)]] = results
+knitr::kable(results)
+```
+
+#### Case IV: Correlated predictors, p=10, but constant coefficients 
+
+
+```{r}
+# Run experiment
+sample_sizes <- c(200, 500, 1000, 2000, 10000)
+p = 10; rho = 0.25;beta_scale = -1.0
+results <- run_experiment(sample_sizes, p = p, rho = rho, beta_scale = beta_scale, sigma = 0.5)
+#print(results)
+R2[[paste0("p",p,"rho",rho, "beta",beta_scale)]] = results
+knitr::kable(results)
+```
+
+
+# Variability
+
+```{r}
+run_many_experiments <- function(sample_sizes = c(50, 100, 200, 500),
+                                 reps = 100,
+                                 p = 10,
+                                 rho = 0.5,
+                                 sigma = 0.5,
+                                 beta_scale = 1
+                                 ) {
+  
+  results <- data.frame()
+
+  for (n in sample_sizes) {
+    for (r in 1:reps) {
+      exp_result <- run_experiment(n, p = p, rho = rho, sigma = sigma, beta_scale = beta_scale)
+     
+      #browser()
+      results <- rbind(results, data.frame(
+        n = n,
+        rep = r,
+        partial_r2_error_rel = exp_result$error_partial_percent,
+        partial_r2_error_abs = exp_result$partial_R2_theoretical - exp_result$partial_R2_empirical
+      ))
+    }
+  }
+  
+  return(results)
+}
+
+
+
+results <- run_many_experiments(sample_sizes = c(100, 200, 500, 1000, 10000), reps = 100)
+results_all = results
+```
+
+```{r}
+results_filtered = subset(results_all, partial_r2_error_rel < 500)
+ggplot(results_filtered, aes(x = factor(n), y = partial_r2_error_rel)) +
+  geom_boxplot(fill = "lightblue") +
+  labs(title = "Partial R² Error vs Sample Size",
+       x = "Sample Size",
+       y = "Percent Error in Partial R²") +
+  theme_minimal() +
+scale_y_log10()
+```
+
+
+
+```{r}
+#results = subset(results_all, partial_r2_error_rel < 500)
+ggplot(results_all, aes(x = factor(n), y = partial_r2_error_abs)) +
+  geom_boxplot(fill = "lightblue") +
+  labs(title = "Partial R² Error vs Sample Size",
+       x = "Sample Size",
+       y = "Absolute Error in Partial R²") +
+  theme_minimal()
+```
+
